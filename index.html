@@ -200,6 +200,10 @@
   /* Repeat + subtasks */
   .chip.repeat{color:#8a5cc0}
   body.dark .chip.repeat{color:#b6a0e6}
+  .daypick{display:flex;gap:6px;margin:0 0 12px}
+  .daypick button{flex:1;min-width:0;padding:9px 0;border:1px solid var(--line);background:transparent;color:var(--text);border-radius:8px;cursor:pointer;font-size:13px}
+  .daypick button:hover{border-color:var(--accent)}
+  .daypick button.on{background:var(--accent);border-color:var(--accent);color:#fff}
   .sub-toggle{cursor:pointer;color:var(--muted);font-size:12px;display:inline-flex;align-items:center;gap:3px;user-select:none}
   .sub-toggle:hover{color:var(--text)}
   .subtasks{margin:7px 0 2px;padding-left:8px;border-left:2px solid var(--line)}
@@ -328,12 +332,25 @@
           <option value="">Без повтора</option>
           <option value="daily">🔁 Каждый день</option>
           <option value="weekdays">🔁 По будням</option>
+          <option value="days">🔁 По дням недели</option>
           <option value="weekly">🔁 Каждую неделю</option>
           <option value="monthly">🔁 Каждый месяц</option>
           <option value="everyN">🔁 Каждые N дней</option>
         </select>
       </div>
       <div id="m-repeatn-wrap" style="display:none"><label>Каждые (дней)</label><input id="m-repeatn" type="number" min="1" value="3"></div>
+    </div>
+    <div id="m-days-wrap" style="display:none">
+      <label>В какие дни</label>
+      <div id="m-days" class="daypick">
+        <button type="button" data-day="1">Пн</button>
+        <button type="button" data-day="2">Вт</button>
+        <button type="button" data-day="3">Ср</button>
+        <button type="button" data-day="4">Чт</button>
+        <button type="button" data-day="5">Пт</button>
+        <button type="button" data-day="6">Сб</button>
+        <button type="button" data-day="0">Вс</button>
+      </div>
     </div>
     <label>Комментарий</label>
     <textarea id="m-note" rows="2" placeholder="Необязательно"></textarea>
@@ -379,6 +396,22 @@ const PR = {1:'var(--red)',2:'var(--orange)',3:'var(--blue)',4:'var(--grey)'};
 const PROJ_COLOR = {'Входящие':'#808080','Личное':'#246fe0','СГЛА':'#eb8909','СтартФит':'#299438','Бриллионс':'#af38eb','EFRecords':'#e05194','Юнитех':'#0aa5b5','Внутр':'#d4263f'};
 const DEFAULT_PROJECTS = ['Входящие','Личное','СГЛА','СтартФит','Бриллионс','EFRecords','Юнитех','Внутр'];
 const REPEAT_LABEL = {daily:'каждый день',weekdays:'по будням',weekly:'каждую неделю',monthly:'каждый месяц'};
+// Повтор по конкретным дням недели: repeat='days', repeatDays — номера дней как у Date.getDay() (0=вс … 6=сб)
+const DOW_SHORT = ['вс','пн','вт','ср','чт','пт','сб'];
+const DOW_ORDER = [1,2,3,4,5,6,0]; // неделя показывается с понедельника
+function normDays(a){
+  if(!Array.isArray(a))return null;
+  const set=a.map(x=>parseInt(x)).filter(x=>x>=0&&x<=6);
+  const out=DOW_ORDER.filter(d=>set.includes(d));
+  return out.length?out:null;
+}
+function daysLabel(a){return (normDays(a)||[]).map(d=>DOW_SHORT[d]).join(', ')}
+function repeatText(repeat,n,days){
+  if(!repeat)return 'нет';
+  if(repeat==='everyN')return 'каждые '+(n||1)+' дн.';
+  if(repeat==='days'){const l=daysLabel(days);return l?'по '+l:'по дням недели'}
+  return REPEAT_LABEL[repeat]||'';
+}
 const DEFAULT_KEYWORDS = `сгла = СГЛА
 стартфит, startfit = СтартФит
 бриллионс, brilliance = Бриллионс
@@ -403,7 +436,7 @@ function seed(){ return []; } // его версия стартует с чис�
 function _seedUnused(){
   const L='Личное',A='Сделаем',F='Фриланс';
   let ord=0;
-  const t=(title,project,priority,due,labels=[])=>({id:uid(),title,project,priority,due,labels,done:false,created:Date.now(),repeat:null,repeatN:null,subtasks:[],order:ord++});
+  const t=(title,project,priority,due,labels=[])=>({id:uid(),title,project,priority,due,labels,done:false,created:Date.now(),repeat:null,repeatN:null,repeatDays:null,subtasks:[],order:ord++});
   return [
     t('Обновить тренировки',L,2,'2026-06-04'),
     t('ХХ: резюме и отклики',L,2,null),
@@ -461,7 +494,7 @@ function normalize(s){
   s.theme=s.theme||'light';
   if(s.keywordsText==null)s.keywordsText=DEFAULT_KEYWORDS;
   if(s.aiEnabled===undefined)s.aiEnabled=true;
-  s.tasks=(s.tasks||[]).map(t=>({...t,labels:t.labels||[],subtasks:t.subtasks||[],repeat:t.repeat||null,repeatN:t.repeatN||null,dueTime:t.dueTime||null,note:t.note||''}));
+  s.tasks=(s.tasks||[]).map(t=>({...t,labels:t.labels||[],subtasks:t.subtasks||[],repeat:t.repeat||null,repeatN:t.repeatN||null,repeatDays:normDays(t.repeatDays),dueTime:t.dueTime||null,note:t.note||''}));
   // миграция: переименование проекта «Агентство» → «Сделаем»
   s.projects=s.projects.map(p=>p==='Агентство'?'Сделаем':p);
   s.tasks.forEach(t=>{if(t.project==='Агентство')t.project='Сделаем';});
@@ -540,13 +573,37 @@ function parseRepeat(words,i){
     return{repeat:'everyN',n:+next,skip};
   }
   if(w==='по'&&next.startsWith('будн'))return{repeat:'weekdays',skip:2};
+  // «по вторникам и четвергам», «по пн, ср, пт», «каждый вторник»
+  if(w==='по'||w==='каждый'||w==='каждую'){
+    const days=[];let last=i;
+    for(let j=i+1;j<words.length;j++){
+      const tw=(words[j]||'').toLowerCase().replace(/[.,;]+$/,'');
+      if(tw==='и'&&days.length)continue;
+      const d=parseDayToken(tw);
+      if(d===null)break;
+      if(!days.includes(d))days.push(d);
+      last=j;
+    }
+    if(days.length)return{repeat:'days',days,skip:last-i+1};
+  }
   return null;
 }
-function nextDue(due,repeat,n){
+const DOW_STEMS=[['воскрес',0],['понедельник',1],['вторник',2],['сред',3],['четверг',4],['пятниц',5],['суббот',6]];
+function parseDayToken(tok){
+  const t=(tok||'').toLowerCase().replace(/[.,;]+$/,'');
+  if(!t)return null;
+  const short={'пн':1,'вт':2,'ср':3,'чт':4,'пт':5,'сб':6,'вс':0};
+  if(short[t]!==undefined)return short[t];
+  const s=DOW_STEMS.find(x=>t.startsWith(x[0]));
+  return s?s[1]:null;
+}
+function nextDue(due,repeat,n,days){
   let d=new Date((due||todayStr())+'T00:00:00');
   const t0=todayStr();
+  const set=repeat==='days'?normDays(days):null;
   const step=()=>{
-    if(repeat==='weekly')d.setDate(d.getDate()+7);
+    if(set){do{d.setDate(d.getDate()+1)}while(!set.includes(d.getDay()))}
+    else if(repeat==='weekly')d.setDate(d.getDate()+7);
     else if(repeat==='monthly')d.setMonth(d.getMonth()+1);
     else if(repeat==='weekdays'){do{d.setDate(d.getDate()+1)}while(d.getDay()===0||d.getDay()===6)}
     else if(repeat==='everyN')d.setDate(d.getDate()+Math.max(1,n||1));
@@ -556,12 +613,22 @@ function nextDue(due,repeat,n){
   do{step();guard++}while(iso(d)<=t0&&guard<400);
   return iso(d);
 }
+// Ближайшая дата из выбранных дней недели: от даты задачи, но не раньше сегодня
+function firstDue(days,from){
+  const t0=todayStr();
+  const start=(from&&from>t0)?from:t0;
+  const set=normDays(days);
+  if(!set)return start;
+  let d=new Date(start+'T00:00:00');
+  for(let i=0;i<7;i++){if(set.includes(d.getDay()))return iso(d);d.setDate(d.getDate()+1)}
+  return iso(d);
+}
 
 // ---------- natural-language quick add parser ----------
 const MON_RE='янв|фев|мар|апр|ма|июн|июл|авг|сен|окт|ноя|дек';
 function parseQuickAdd(text){
   let raw=' '+text.trim()+' ';
-  let title=[],project=null,labels=[],priority=4,due=null,dueTime=null,repeat=null,repeatN=null;
+  let title=[],project=null,labels=[],priority=4,due=null,dueTime=null,repeat=null,repeatN=null,repeatDays=null;
 
   // NB: JS \b word-boundary doesn't work for Cyrillic — use whitespace lookarounds (raw is space-padded)
   const B='(?<=\\s)', E='(?=\\s)';
@@ -612,7 +679,7 @@ function parseQuickAdd(text){
     const md=parseMonthDate(words,i);
     if(md){due=md.due;i+=md.skip-1;continue}
     const rp=parseRepeat(words,i);
-    if(rp){repeat=rp.repeat;repeatN=rp.n||null;i+=rp.skip-1;continue}
+    if(rp){repeat=rp.repeat;repeatN=rp.n||null;repeatDays=rp.days||null;i+=rp.skip-1;continue}
     if(w[0]==='#'){project=w.slice(1);continue}
     if(w[0]==='@'){labels.push(w.slice(1));continue}
     if(/^p[1-4]$/i.test(w)){priority=+w[1];continue}
@@ -626,7 +693,7 @@ function parseQuickAdd(text){
     const ex=state.projects.find(p=>p.toLowerCase()===project.toLowerCase());
     if(ex)project=ex; else state.projects.push(project);
   }
-  return {title:title.join(' '),project:project||'Входящие',labels,priority,due,dueTime,repeat,repeatN};
+  return {title:title.join(' '),project:project||'Входящие',labels,priority,due,dueTime,repeat,repeatN,repeatDays};
 }
 
 // ---------- views ----------
@@ -811,7 +878,7 @@ function taskHTML(t){
   const overdue=t.due&&t.due<t0;
   const due=t.due?`<span class="chip due ${overdue?'overdue':''}">📅 ${fmtDate(t.due)}</span>`:'';
   const time=t.dueTime?`<span class="chip time">🕘 ${t.dueTime}</span>`:'';
-  const repLabel=t.repeat==='everyN'?`каждые ${t.repeatN||1} дн.`:(REPEAT_LABEL[t.repeat]||'');
+  const repLabel=repeatText(t.repeat,t.repeatN,t.repeatDays);
   const repeat=t.repeat?`<span class="chip repeat">🔁 ${repLabel}</span>`:'';
   const proj=(view.type!=='project'&&t.project!=='Входящие')?`<span class="chip proj"><span class="dot" style="background:${PROJ_COLOR[t.project]||'#999'}"></span>${t.project}</span>`:'';
   const labels=t.labels.map(l=>`<span class="label-chip">@${l}</span>`).join('');
@@ -851,7 +918,12 @@ function moveOverdueToday(){const t=todayStr();overdueTasks().forEach(x=>x.due=t
 function createTask(p){
   if(!p||!p.title)return;
   const maxOrder=state.tasks.reduce((m,x)=>Math.max(m,x.order||0),0);
-  state.tasks.push({id:uid(),title:p.title,project:p.project||'Входящие',priority:p.priority||4,due:p.due||(p.repeat?todayStr():null),dueTime:p.dueTime||null,labels:p.labels||[],note:p.note||'',done:false,created:Date.now(),repeat:p.repeat||null,repeatN:p.repeatN||null,subtasks:Array.isArray(p.subtasks)?p.subtasks:[],order:maxOrder+1});
+  let repeat=p.repeat||null;
+  const rdays=repeat==='days'?normDays(p.repeatDays):null;
+  if(repeat==='days'&&!rdays)repeat=null;
+  let due=p.due||(repeat?todayStr():null);
+  if(repeat==='days')due=firstDue(rdays,due);
+  state.tasks.push({id:uid(),title:p.title,project:p.project||'Входящие',priority:p.priority||4,due,dueTime:p.dueTime||null,labels:p.labels||[],note:p.note||'',done:false,created:Date.now(),repeat,repeatN:p.repeatN||null,repeatDays:rdays,subtasks:Array.isArray(p.subtasks)?p.subtasks:[],order:maxOrder+1});
   save();render();
 }
 function addTask(text){ if(!text.trim())return; createTask(parseQuickAdd(text)); }
@@ -973,8 +1045,9 @@ ${state.keywordsText||''}
 - due: дата YYYY-MM-DD или null (учитывай «завтра», «послезавтра», «через N дней», дни недели, «на выходных», «8 июня»).
 - dueTime: «HH:MM» или null («до конца дня»→18:00, «утром»→09:00, «в обед»→13:00, «вечером»→19:00).
 - priority: 1 (срочно/важно) .. 4 (обычное), по умолчанию 4.
-- repeat: null|daily|weekdays|weekly|monthly|everyN; repeatN: число для everyN иначе null.
-Верни ТОЛЬКО JSON с полями: title, project, labels, due, dueTime, priority, repeat, repeatN.`;
+- repeat: null|daily|weekdays|days|weekly|monthly|everyN; repeatN: число для everyN иначе null.
+- repeatDays: только для repeat="days" — массив номеров дней недели (0=вс,1=пн,2=вт,3=ср,4=чт,5=пт,6=сб); «по вторникам и четвергам» → repeat:"days", repeatDays:[2,4]; «по пн, ср, пт» → [1,3,5]. Иначе null.
+Верни ТОЛЬКО JSON с полями: title, project, labels, due, dueTime, priority, repeat, repeatN, repeatDays.`;
   let j;
   aiLastError=null;
   try{
@@ -993,8 +1066,10 @@ ${state.keywordsText||''}
   if(!state.projects.includes(o.project))o.project='Входящие';
   o.labels=Array.isArray(o.labels)?o.labels.map(x=>String(x).replace(/^@/,'')).filter(Boolean):[];
   o.priority=[1,2,3,4].includes(+o.priority)?+o.priority:4;
-  o.repeat=['daily','weekdays','weekly','monthly','everyN'].includes(o.repeat)?o.repeat:null;
+  o.repeat=['daily','weekdays','days','weekly','monthly','everyN'].includes(o.repeat)?o.repeat:null;
   o.repeatN=o.repeat==='everyN'?Math.max(1,parseInt(o.repeatN)||1):null;
+  o.repeatDays=o.repeat==='days'?normDays(o.repeatDays):null;
+  if(o.repeat==='days'&&!o.repeatDays)o.repeat=null;
   if(!(typeof o.due==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(o.due)))o.due=null;
   if(!(typeof o.dueTime==='string'&&/^\d{2}:\d{2}$/.test(o.dueTime)))o.dueTime=null;
   return o;
@@ -1023,7 +1098,7 @@ function toggleDone(id){
   const t=state.tasks.find(x=>x.id===id);if(!t)return;
   if(!t.done&&t.repeat){
     // recurring: reschedule to next occurrence instead of completing
-    t.due=nextDue(t.due,t.repeat,t.repeatN);
+    t.due=nextDue(t.due,t.repeat,t.repeatN,t.repeatDays);
     (t.subtasks||[]).forEach(s=>s.done=false);
     save();
     const el=document.querySelector(`.task[data-id="${id}"]`);
@@ -1077,6 +1152,7 @@ function openModal(id){
   document.getElementById('m-labels').value=t.labels.join(', ');
   document.getElementById('m-repeat').value=t.repeat||'';
   document.getElementById('m-repeatn').value=t.repeatN||3;
+  editDays=normDays(t.repeatDays)||[];
   document.getElementById('m-note').value=t.note||'';
   syncRepeatN();
   editSubs=(t.subtasks||[]).map(s=>({...s}));
@@ -1095,16 +1171,36 @@ function saveModal(){
   t.labels=document.getElementById('m-labels').value.split(',').map(s=>s.trim()).filter(Boolean);
   t.repeat=document.getElementById('m-repeat').value||null;
   t.repeatN=t.repeat==='everyN'?Math.max(1,+document.getElementById('m-repeatn').value||1):null;
+  t.repeatDays=t.repeat==='days'?normDays(editDays):null;
+  if(t.repeat==='days'&&!t.repeatDays)t.repeat=null;
   t.note=document.getElementById('m-note').value.trim();
   if(t.repeat&&!t.due)t.due=todayStr();
+  if(t.repeat==='days')t.due=firstDue(t.repeatDays,t.due);
   t.subtasks=editSubs.map(s=>({...s,title:s.title.trim()})).filter(s=>s.title);
   save();closeModal();render();
 }
+let editDays=[];
+function renderDayPick(){
+  document.querySelectorAll('#m-days button').forEach(b=>b.classList.toggle('on',editDays.includes(+b.dataset.day)));
+}
 function syncRepeatN(){
-  document.getElementById('m-repeatn-wrap').style.display=
-    document.getElementById('m-repeat').value==='everyN'?'block':'none';
+  const v=document.getElementById('m-repeat').value;
+  document.getElementById('m-repeatn-wrap').style.display=v==='everyN'?'block':'none';
+  document.getElementById('m-days-wrap').style.display=v==='days'?'block':'none';
+  // по умолчанию отмечаем день, на который задача стоит сейчас
+  if(v==='days'&&!editDays.length){
+    const due=document.getElementById('m-due').value;
+    editDays=[new Date((due||todayStr())+'T00:00:00').getDay()];
+  }
+  renderDayPick();
 }
 document.getElementById('m-repeat').addEventListener('change',syncRepeatN);
+document.getElementById('m-days').addEventListener('click',e=>{
+  const b=e.target.closest('button[data-day]');if(!b)return;
+  const d=+b.dataset.day;
+  editDays=editDays.includes(d)?editDays.filter(x=>x!==d):editDays.concat([d]);
+  renderDayPick();
+});
 
 // ---------- events ----------
 document.addEventListener('change',e=>{
@@ -1368,6 +1464,8 @@ function describeAction(a){
     if('project'in c)ch.push('проект → '+c.project);
     if('labels'in c)ch.push('метки → '+(c.labels||[]).join(', '));
     if('done'in c)ch.push(c.done?'выполнено':'снять выполнение');
+    if('repeat'in c)ch.push('повтор → '+repeatText(c.repeat,c.repeatN,c.repeatDays));
+    else if('repeatDays'in c)ch.push('дни повтора → '+(daysLabel(c.repeatDays)||'нет'));
     return '✏️ «'+name+'»: '+ch.join('; ');
   }
   if(a.type==='delete'){const t=state.tasks.find(x=>x.id===a.id);return '🗑 Удалить: «'+(t?t.title:a.id)+'»';}
@@ -1383,8 +1481,9 @@ function applyActions(actions){
         due:(typeof tk.due==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(tk.due))?tk.due:null,
         dueTime:(typeof tk.dueTime==='string'&&/^\d{2}:\d{2}$/.test(tk.dueTime))?tk.dueTime:null,
         priority:[1,2,3,4].includes(+tk.priority)?+tk.priority:4,
-        repeat:['daily','weekdays','weekly','monthly','everyN'].includes(tk.repeat)?tk.repeat:null,
+        repeat:['daily','weekdays','days','weekly','monthly','everyN'].includes(tk.repeat)?tk.repeat:null,
         repeatN:tk.repeat==='everyN'?Math.max(1,parseInt(tk.repeatN)||1):null,
+        repeatDays:tk.repeat==='days'?normDays(tk.repeatDays):null,
         subtasks:Array.isArray(tk.subtasks)?tk.subtasks.filter(s=>typeof s==='string'&&s.trim()).map(s=>({id:uid(),title:s.trim(),done:false})):[]});
       n++;
     }else if(a.type==='add_subtask'&&a.id&&Array.isArray(a.titles)){
@@ -1415,6 +1514,18 @@ function applyActions(actions){
         if('dueTime'in c)t.dueTime=(typeof c.dueTime==='string'&&/^\d{2}:\d{2}$/.test(c.dueTime))?c.dueTime:null;
         if('priority'in c&&[1,2,3,4].includes(+c.priority))t.priority=+c.priority;
         if('done'in c)t.done=!!c.done;
+        if('repeat'in c){
+          const rv=['daily','weekdays','days','weekly','monthly','everyN'].includes(c.repeat)?c.repeat:null;
+          t.repeat=rv;
+          t.repeatN=rv==='everyN'?Math.max(1,parseInt(c.repeatN)||1):null;
+          t.repeatDays=rv==='days'?normDays(c.repeatDays):null;
+          if(rv==='days'&&!t.repeatDays)t.repeat=null;
+          if(t.repeat&&!t.due)t.due=todayStr();
+          if(t.repeat==='days')t.due=firstDue(t.repeatDays,t.due);
+        }else if('repeatDays'in c&&t.repeat==='days'){
+          const nd=normDays(c.repeatDays);
+          if(nd){t.repeatDays=nd;t.due=firstDue(nd,t.due)}
+        }
         n++;
       }
     }else if(a.type==='delete'&&a.id){
@@ -1434,19 +1545,20 @@ function renderActions(actions){
 async function chatAI(){
   const today=todayStr();
   const wd=['воскресенье','понедельник','вторник','среда','четверг','пятница','суббота'][new Date().getDay()];
-  const taskCtx=state.tasks.filter(t=>!t.done).map(t=>({id:t.id,title:t.title,project:t.project,due:t.due,dueTime:t.dueTime,priority:t.priority,labels:t.labels,repeat:t.repeat,subtasks:(t.subtasks||[]).map(s=>s.title)}));
+  const taskCtx=state.tasks.filter(t=>!t.done).map(t=>({id:t.id,title:t.title,project:t.project,due:t.due,dueTime:t.dueTime,priority:t.priority,labels:t.labels,repeat:t.repeat,repeatN:t.repeatN,repeatDays:t.repeatDays,subtasks:(t.subtasks||[]).map(s=>s.title)}));
   const sys=`Ты — помощник-планировщик внутри приложения задач. Сегодня ${today} (${wd}). Отвечай кратко и по делу, на русском.
 Доступные проекты: ${state.projects.join(', ')}.
 Когда уместно — предлагай конкретные изменения задач. Бери id ТОЛЬКО из списка ниже, не выдумывай.
 Верни СТРОГО JSON: {"reply": "<краткий ответ пользователю>", "actions": [ ... ]}.
 Виды действий:
-- {"type":"add","task":{"title","project","labels":[],"due":"YYYY-MM-DD|null","dueTime":"HH:MM|null","priority":1-4,"repeat":null,"repeatN":null,"subtasks":["подзадача 1","подзадача 2"]}}  // "subtasks" необязательно — массив строк-названий
-- {"type":"update","id":"<id>","changes":{ любые из: "title","project","labels","due","dueTime","priority","done" }}
+- {"type":"add","task":{"title","project","labels":[],"due":"YYYY-MM-DD|null","dueTime":"HH:MM|null","priority":1-4,"repeat":null,"repeatN":null,"repeatDays":null,"subtasks":["подзадача 1","подзадача 2"]}}  // "subtasks" необязательно — массив строк-названий
+- {"type":"update","id":"<id>","changes":{ любые из: "title","project","labels","due","dueTime","priority","done","repeat","repeatN","repeatDays" }}
 - {"type":"add_subtask","id":"<id задачи>","titles":["подзадача 1","подзадача 2"]}  // добавить подзадачи (чек-листа) в существующую задачу
 - {"type":"move_to_subtask","id":"<id переносимой задачи>","parentId":"<id задачи-получателя>"}  // превратить существующую задачу в подзадачу другой
 - {"type":"delete","id":"<id>"}
 Если просят разбить задачу на шаги/пункты/чек-лист — используй add_subtask с id этой задачи. У задач в контексте поле "subtasks" — это уже существующие подзадачи (не дублируй их).
 Если просят перенести/сделать одну задачу подзадачей другой — используй ОДНО действие move_to_subtask (НЕ комбинацию delete+add_subtask). Подзадача хранит только название и галочку; дата/приоритет/проект исходной задачи при переносе не сохраняются.
+Повтор: repeat — null|daily|weekdays|days|weekly|monthly|everyN. Для конкретных дней недели repeat:"days" и repeatDays — массив номеров (0=вс,1=пн,2=вт,3=ср,4=чт,5=пт,6=сб): «статьи по вторникам и четвергам» → repeat:"days", repeatDays:[2,4]; «кейсы по пн, ср, пт» → [1,3,5]. repeatN нужен только для everyN.
 Если изменения не нужны — "actions": []. В "reply" коротко поясни, что предлагаешь.
 Текущие активные задачи (JSON): ${JSON.stringify(taskCtx)}`;
   const contents=chatHistory.map(m=>({role:m.role==='model'?'model':'user',parts:[{text:m.text}]}));
